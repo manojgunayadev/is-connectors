@@ -45,12 +45,14 @@ import org.wso2.carbon.identity.core.util.IdentityUtil;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -176,6 +178,54 @@ public class GithubAuthenticator extends OpenIDConnectAuthenticator implements F
         }
         return oAuthResponse;
     }
+    
+    /**
+     * Get subject attributes.
+     * @param token OAuthClientResponse
+     * @param authenticatorProperties Map<String, String>
+     * @return Map<ClaimMapping, String> Claim mappings.
+     */
+    protected Map<ClaimMapping, String> getSubjectAttributes(OAuthClientResponse token,
+                                                             Map<String, String> authenticatorProperties) {
+
+        Map<ClaimMapping, String> claims = new HashMap<>();
+
+        try {
+
+            String accessToken = token.getParam(OIDCAuthenticatorConstants.ACCESS_TOKEN);
+            String url = getUserInfoEndpoint(token, authenticatorProperties);
+
+            String json = sendUserAPIRequest(url, accessToken);
+
+            if (StringUtils.isBlank(json)) {
+                if(log.isDebugEnabled()) {
+                    log.debug("Unable to fetch user claims. Proceeding without user claims");
+                }
+                return claims;
+            }
+
+            Map<String, Object> jsonObject = JSONUtils.parseJSON(json);
+
+            for (Map.Entry<String, Object> data : jsonObject.entrySet()) {
+
+                String key = data.getKey();
+
+                claims.put(ClaimMapping.build(key, key, null, false), jsonObject.get(key).toString());
+
+                if (log.isDebugEnabled() &&
+                        IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.USER_CLAIMS)) {
+                    log.debug("Adding claims from end-point data mapping : " + key + " - " +
+                            jsonObject.get(key).toString());
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("Error occurred while accessing user info endpoint", e);
+        }
+
+        return claims;
+    }
+    
 
     private OAuthClientRequest getAccessRequest(String tokenEndPoint, String clientId, String code, String clientSecret,
                                                 String callbackurl) throws AuthenticationFailedException {
@@ -191,6 +241,10 @@ public class GithubAuthenticator extends OpenIDConnectAuthenticator implements F
         return accessRequest;
     }
 
+    @Override
+    public String getClaimDialectURI() {
+        return null;
+    }
     /**
      * Get Configuration Properties
      */
@@ -256,6 +310,35 @@ public class GithubAuthenticator extends OpenIDConnectAuthenticator implements F
         HttpURLConnection urlConnection = (HttpURLConnection) obj.openConnection();
         urlConnection.setRequestMethod("GET");
         urlConnection.setRequestProperty("Authorization", "Bearer " + accessToken);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
+        StringBuilder builder = new StringBuilder();
+        String inputLine = reader.readLine();
+        while (inputLine != null) {
+            builder.append(inputLine).append("\n");
+            inputLine = reader.readLine();
+        }
+        reader.close();
+        if (log.isDebugEnabled() && IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.USER_ID_TOKEN)) {
+            log.debug("response: " + builder.toString());
+        }
+        return builder.toString();
+    }
+    
+    protected String sendUserAPIRequest(String url, String accessToken)
+            throws IOException {
+        if (log.isDebugEnabled()) {
+            log.debug("Claim URL: " + url);
+        }
+
+        if (url == null) {
+            return StringUtils.EMPTY;
+        }
+
+        URL obj = new URL(url);
+        HttpURLConnection urlConnection = (HttpURLConnection) obj.openConnection();
+        urlConnection.setRequestMethod("GET");
+        urlConnection.setRequestProperty("Authorization", "Bearer " + accessToken);
+        urlConnection.setRequestProperty("Accept", "application/vnd.github.v3+json");
         BufferedReader reader = new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
         StringBuilder builder = new StringBuilder();
         String inputLine = reader.readLine();
